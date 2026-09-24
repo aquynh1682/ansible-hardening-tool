@@ -1,0 +1,80 @@
+---
+# VDI Hardening Scanner
+# Tac gia: Quynh Ngo. Ho tro: Claude (Anthropic) qua Claude Code.
+# Cap nhat: 2026-09-24. Lich su day du: git log -- <duong dan file>
+
+# Quet danh gia hardening - CHI DOC, khong sua doi host dich.
+#
+# Bien bat buoc truyen tu ngoai vao (-e):
+#   report_dir       : thu muc tren controller de ghi ket qua JSON
+#   audit_config_b64 : config JSON da base64 cho agent
+- name: Audit hardening checklist
+  hosts: targets
+  gather_facts: false
+  become: true
+  any_errors_fatal: false
+
+  vars:
+    report_dir: "{{ lookup('env', 'REPORT_DIR') | default('/tmp/hardening-report', true) }}"
+    audit_config_b64: ""
+
+  tasks:
+    - name: Bao dam thu muc report ton tai tren controller
+      ansible.builtin.file:
+        path: "{{ report_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Kiem tra ket noi va python3 tren host dich
+      ansible.builtin.raw: command -v python3 || command -v python
+      register: py_check
+      changed_when: false
+      failed_when: false
+
+    - name: Dung lai neu host khong co python
+      ansible.builtin.fail:
+        msg: >-
+          Host khong co python3. Cai dat bang:
+          apt-get install -y python3  (Debian/Ubuntu)
+      when: py_check.rc != 0
+
+    - name: Chay audit agent (read-only)
+      ansible.builtin.script: "files/audit_agent.py {{ audit_config_b64 | quote }}"
+      register: agent
+      changed_when: false
+      failed_when: false
+
+    - name: Tach payload JSON tu output cua agent
+      ansible.builtin.set_fact:
+        audit_payload: >-
+          {{ (agent.stdout | default('')).split('__HARDENING_JSON_START__')[1].split('__HARDENING_JSON_END__')[0]
+             | trim | from_json }}
+      when:
+        - agent.stdout is defined
+        - "'__HARDENING_JSON_START__' in agent.stdout"
+        - "'__HARDENING_JSON_END__' in agent.stdout"
+
+    - name: Ghi ket qua thanh cong ra controller
+      ansible.builtin.copy:
+        content: "{{ {'host': inventory_hostname, 'ansible_host': ansible_host | default(inventory_hostname), 'ok': true, 'payload': audit_payload} | to_nice_json }}"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}.json"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      when: audit_payload is defined
+
+    - name: Ghi ket qua loi ra controller
+      ansible.builtin.copy:
+        content: "{{ {'host': inventory_hostname, 'ansible_host': ansible_host | default(inventory_hostname), 'ok': false, 'error': 'Agent khong tra ve JSON hop le', 'rc': agent.rc | default(-1), 'stdout': (agent.stdout | default(''))[:4000], 'stderr': (agent.stderr | default(''))[:4000]} | to_nice_json }}"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}.json"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      when: audit_payload is not defined
+
+    - name: Tom tat tren man hinh
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} -> {{ audit_payload.summary | default('LOI: khong lay duoc ket qua') }}"

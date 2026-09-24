@@ -1,0 +1,25 @@
+---
+# Moi block ben trong cac file duoi day duoc gan tag theo dung ID checklist,
+# vi vay co the chay rieng tung muc:
+#     ansible-playbook remediate.yml --tags "OS-02,OS-30"
+- name: Chuan bi (luon chay)
+  ansible.builtin.import_tasks: prep.yml
+  tags: [always]
+
+- name: Nhom co ban va tham so he thong
+  ansible.builtin.import_tasks: basic.yml
+
+- name: Nhom tai khoan va chinh sach mat khau
+  ansible.builtin.import_tasks: accounts.yml
+
+- name: Nhom gioi han tai nguyen
+  ansible.builtin.import_tasks: limits.yml
+
+- name: Nhom SSH
+  ansible.builtin.import_tasks: ssh.yml
+
+- name: Nhom dich vu
+  ansible.builtin.import_tasks: services.yml
+
+- name: Nhom firewall
+  ansible.builtin.import_tasks: firewall.yml

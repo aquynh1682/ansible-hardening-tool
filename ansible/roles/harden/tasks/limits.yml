@@ -1,0 +1,80 @@
+---
+# ===================== OS-24: Max open file per-user =====================
+- name: "OS-24 | Gioi han nofile"
+  tags: ["OS-24"]
+  block:
+    - name: "OS-24 | Ghi /etc/security/limits.d/90-hardening-nofile.conf"
+      ansible.builtin.copy:
+        dest: /etc/security/limits.d/90-hardening-nofile.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Quan ly boi cong cu hardening - khong sua tay
+          *        soft    nofile   {{ harden_nofile }}
+          *        hard    nofile   {{ harden_nofile }}
+          root     soft    nofile   {{ harden_nofile }}
+          root     hard    nofile   {{ harden_nofile }}
+          {% for u in harden_business_users %}
+          {{ u }}        soft    nofile   {{ harden_nofile }}
+          {{ u }}        hard    nofile   {{ harden_nofile }}
+          {% endfor %}
+          {% for u in harden_admin_users %}
+          {{ u }}        soft    nofile   {{ harden_nofile }}
+          {{ u }}        hard    nofile   {{ harden_nofile }}
+          {% endfor %}
+
+    - name: "OS-24 | Ap limits cho systemd service (DefaultLimitNOFILE)"
+      ansible.builtin.lineinfile:
+        path: /etc/systemd/system.conf
+        regexp: '^\s*#?\s*DefaultLimitNOFILE\s*='
+        line: "DefaultLimitNOFILE={{ harden_nofile }}"
+        backup: true
+      notify: reload systemd daemon
+
+    - name: "OS-24 | Bao dam pam_limits duoc nap (Debian)"
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/common-session
+        regexp: '^session\s+required\s+pam_limits\.so'
+        line: "session required                        pam_limits.so"
+      when: ansible_os_family == "Debian"
+      failed_when: false
+
+# ===================== OS-25: Max process per-user =====================
+- name: "OS-25 | Gioi han nproc"
+  tags: ["OS-25"]
+  block:
+    - name: "OS-25 | Ghi /etc/security/limits.d/90-hardening-nproc.conf"
+      ansible.builtin.copy:
+        dest: /etc/security/limits.d/90-hardening-nproc.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Quan ly boi cong cu hardening - khong sua tay
+          *        soft    nproc    {{ harden_nproc }}
+          *        hard    nproc    {{ harden_nproc }}
+          root     soft    nproc    {{ harden_nproc }}
+          root     hard    nproc    {{ harden_nproc }}
+          {% for u in harden_business_users %}
+          {{ u }}        soft    nproc    {{ harden_nproc }}
+          {{ u }}        hard    nproc    {{ harden_nproc }}
+          {% endfor %}
+          {% for u in harden_admin_users %}
+          {{ u }}        soft    nproc    {{ harden_nproc }}
+          {{ u }}        hard    nproc    {{ harden_nproc }}
+          {% endfor %}
+
+    - name: "OS-25 | Go bo gioi han nproc mac dinh cua distro neu thap hon"
+      ansible.builtin.file:
+        path: /etc/security/limits.d/20-nproc.conf
+        state: absent
+      when: ansible_os_family == "RedHat"
+
+    - name: "OS-25 | Ap limits cho systemd service (DefaultLimitNPROC)"
+      ansible.builtin.lineinfile:
+        path: /etc/systemd/system.conf
+        regexp: '^\s*#?\s*DefaultLimitNPROC\s*='
+        line: "DefaultLimitNPROC={{ harden_nproc }}"
+        backup: true
+      notify: reload systemd daemon

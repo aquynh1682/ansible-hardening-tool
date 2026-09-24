@@ -1,0 +1,101 @@
+---
+# ==========================================================================
+# Bien cau hinh cho role harden.
+# Web UI se ghi de cac bien nay qua file group_vars/all.yml sinh tu Cau hinh.
+# ==========================================================================
+
+# --- Co ban -------------------------------------------------------------
+harden_timezone: "Asia/Ho_Chi_Minh"
+
+# Danh sach NTP server noi bo (toi thieu 2). Bat buoc cho OS-03.
+harden_ntp_servers: []
+
+# --- Sizing / gioi han --------------------------------------------------
+harden_nofile: 65535
+harden_nproc: 8192
+harden_conntrack_max: 524288
+harden_conntrack_hashsize: 131072
+harden_tmout: 300
+
+# fs.file-max: de trong de tu tinh theo RAM (71680 x so GB RAM)
+harden_file_max: ""
+
+# --- Tai khoan ----------------------------------------------------------
+# User quan tri: duoc them vao group wheel va vao SSH AllowGroups.
+# QUAN TRONG: phai khai bao, neu khong OS-27 va OS-05 se bi bo qua de tranh
+# khoa mat quyen truy cap he thong.
+harden_admin_users: []
+
+# User nghiep vu: duoc ap limits nofile/nproc rieng.
+harden_business_users: []
+
+# Group duoc phep SSH vao may. Mac dinh dung wheel.
+harden_ssh_allow_groups:
+  - wheel
+
+# --- Mang / firewall ----------------------------------------------------
+# Dai IP quan tri duoc phep SSH. BAT BUOC cho OS-10, neu trong se bo qua.
+harden_admin_networks: []
+
+# Cac port dich vu can mo them: [{port: 443, proto: tcp, from: "10.0.0.0/8", comment: "HTTPS"}]
+harden_extra_firewall_rules: []
+
+# --- Log ----------------------------------------------------------------
+# Log server tap trung: ["10.1.2.3:514"]. Dung giao thuc TCP (@@).
+harden_log_servers: []
+
+# --- Repo ---------------------------------------------------------------
+harden_internal_repo_hosts: []
+
+# --- Cong tac an toan ---------------------------------------------------
+# Cho phep thay doi can REBOOT (GRUB/kdump). Mac dinh false.
+harden_allow_reboot_changes: false
+
+# Cho phep go card mang ao virbr0 (tat libvirt default network).
+harden_remove_virtual_nic: true
+
+# --- sysctl guideline ---------------------------------------------------
+harden_sysctl_guideline:
+  net.ipv4.conf.all.rp_filter: "1"
+  net.ipv4.conf.default.rp_filter: "1"
+  net.ipv4.conf.all.accept_redirects: "0"
+  net.ipv4.conf.default.accept_redirects: "0"
+  net.ipv6.conf.all.accept_redirects: "0"
+  net.ipv6.conf.default.accept_redirects: "0"
+  net.ipv4.conf.all.send_redirects: "0"
+  net.ipv4.conf.default.send_redirects: "0"
+  net.ipv4.icmp_echo_ignore_broadcasts: "1"
+  net.ipv4.tcp_syncookies: "1"
+  net.ipv4.conf.all.accept_source_route: "0"
+  net.ipv4.conf.default.accept_source_route: "0"
+  net.ipv4.conf.all.log_martians: "1"
+  net.ipv4.conf.default.log_martians: "1"
+  fs.suid_dumpable: "0"
+  kernel.randomize_va_space: "2"
+  vm.zone_reclaim_mode: "0"
+  vm.swappiness: "10"
+  net.core.somaxconn: "65535"
+  net.ipv4.tcp_max_syn_backlog: "8192"
+
+# --- SSH ----------------------------------------------------------------
+harden_ssh_macs:
+  - hmac-sha2-512-etm@openssh.com
+  - hmac-sha2-256-etm@openssh.com
+  - umac-128-etm@openssh.com
+  - hmac-sha2-512
+  - hmac-sha2-256
+
+harden_ssh_max_auth_tries: 3
+harden_ssh_client_alive_interval: 300
+harden_ssh_client_alive_count_max: 3
+
+# --- sudo trace ---------------------------------------------------------
+harden_sudo_trace_binaries:
+  - /usr/bin/tcptraceroute
+  - /usr/bin/traceroute
+  - /bin/tcptraceroute
+  - /bin/traceroute
+  - /usr/bin/iotop
+  - /usr/sbin/iotop
+  - /usr/sbin/tcpdump
+  - /usr/sbin/lsof

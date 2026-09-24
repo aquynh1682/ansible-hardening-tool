@@ -1,0 +1,259 @@
+---
+# ===================== OS-02: Time zone =====================
+- name: "OS-02 | Cau hinh timezone va RTC"
+  tags: ["OS-02"]
+  block:
+    - name: "OS-02 | Dat timezone {{ harden_timezone }}"
+      community.general.timezone:
+        name: "{{ harden_timezone }}"
+      notify: restart cron
+      register: tz_result
+      failed_when: false
+
+    - name: "OS-02 | Dat timezone bang timedatectl (du phong)"
+      ansible.builtin.command: "timedatectl set-timezone {{ harden_timezone }}"
+      when: tz_result is failed or tz_result is skipped
+      changed_when: true
+
+    - name: "OS-02 | Dong bo dong ho phan cung theo UTC"
+      ansible.builtin.command: timedatectl set-local-rtc 0
+      changed_when: false
+
+# ===================== OS-03: Dong bo thoi gian =====================
+- name: "OS-03 | Dong bo thoi gian bang chrony"
+  tags: ["OS-03"]
+  block:
+    - name: "OS-03 | Bo qua neu chua khai bao NTP server noi bo"
+      ansible.builtin.debug:
+        msg: "BO QUA OS-03: chua khai bao harden_ntp_servers trong Cau hinh."
+      when: harden_ntp_servers | length == 0
+
+    - name: "OS-03 | Cai dat chrony"
+      ansible.builtin.package:
+        name: chrony
+        state: present
+      when: harden_ntp_servers | length > 0
+
+    - name: "OS-03 | Ghi cau hinh NTP server noi bo"
+      ansible.builtin.copy:
+        dest: "{{ '/etc/chrony/conf.d/99-hardening.conf' if ansible_os_family == 'Debian' else '/etc/chrony.d/99-hardening.conf' }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Quan ly boi cong cu hardening - khong sua tay
+          {% for s in harden_ntp_servers %}
+          server {{ s }} iburst
+          {% endfor %}
+      when: harden_ntp_servers | length > 0
+      notify: restart chrony
+      register: chrony_dropin
+      failed_when: false
+
+    - name: "OS-03 | Ghi cau hinh NTP vao chrony.conf (khi khong co conf.d)"
+      ansible.builtin.blockinfile:
+        path: "{{ '/etc/chrony/chrony.conf' if ansible_os_family == 'Debian' else '/etc/chrony.conf' }}"
+        marker: "# {mark} HARDENING NTP"
+        block: |
+          {% for s in harden_ntp_servers %}
+          server {{ s }} iburst
+          {% endfor %}
+        create: false
+      when:
+        - harden_ntp_servers | length > 0
+        - chrony_dropin is failed
+      notify: restart chrony
+
+    - name: "OS-03 | Bat va khoi dong chrony"
+      ansible.builtin.service:
+        name: "{{ harden_chrony_service }}"
+        state: started
+        enabled: true
+      when: harden_ntp_servers | length > 0
+
+# ===================== OS-11: Max open file toan OS =====================
+- name: "OS-11 | fs.file-max theo sizing RAM"
+  tags: ["OS-11"]
+  block:
+    - name: "OS-11 | Ghi drop-in sysctl fs.file-max"
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/90-hardening-filemax.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # RAM {{ (ansible_memtotal_mb | int / 1024) | round | int }} GB -> 71680 x GB
+          fs.file-max = {{ harden_file_max_effective | int }}
+      notify: reload sysctl
+
+    - name: "OS-11 | Ap dung ngay"
+      ansible.posix.sysctl:
+        name: fs.file-max
+        value: "{{ harden_file_max_effective | int }}"
+        sysctl_set: true
+        reload: false
+
+# ===================== OS-18: Bo card mang ao =====================
+- name: "OS-18 | Go card mang ao virbr0"
+  tags: ["OS-18"]
+  when: harden_remove_virtual_nic | bool
+  block:
+    - name: "OS-18 | Kiem tra su ton tai cua virbr0"
+      ansible.builtin.stat:
+        path: /sys/class/net/virbr0
+      register: virbr0
+
+    - name: "OS-18 | Tat va huy libvirt default network"
+      ansible.builtin.shell: |
+        set -e
+        virsh net-destroy default 2>/dev/null || true
+        virsh net-autostart --disable default 2>/dev/null || true
+        ip link set virbr0 down 2>/dev/null || true
+        ip link delete virbr0 type bridge 2>/dev/null || true
+      when: virbr0.stat.exists
+      changed_when: true
+
+    - name: "OS-18 | Tat service libvirtd neu may khong dung ao hoa"
+      ansible.builtin.service:
+        name: libvirtd
+        state: stopped
+        enabled: false
+      when: virbr0.stat.exists
+      failed_when: false
+
+# ===================== OS-20: SELinux disabled =====================
+- name: "OS-20 | Dat SELinux ve disabled"
+  tags: ["OS-20"]
+  block:
+    - name: "OS-20 | Kiem tra file cau hinh SELinux"
+      ansible.builtin.stat:
+        path: /etc/selinux/config
+      register: selinux_cfg
+
+    - name: "OS-20 | Ghi SELINUX=disabled"
+      ansible.builtin.lineinfile:
+        path: /etc/selinux/config
+        regexp: '^\s*SELINUX\s*='
+        line: "SELINUX=disabled"
+        backup: true
+      when: selinux_cfg.stat.exists
+
+    - name: "OS-20 | Chuyen ve permissive ngay (disabled can reboot)"
+      ansible.builtin.command: setenforce 0
+      when: selinux_cfg.stat.exists
+      changed_when: false
+      failed_when: false
+
+    - name: "OS-20 | Khong co SELinux tren he thong"
+      ansible.builtin.debug:
+        msg: "SELinux khong duoc cai dat - muc nay mac nhien dat."
+      when: not selinux_cfg.stat.exists
+
+# ===================== OS-21: ip_conntrack_max =====================
+- name: "OS-21 | nf_conntrack_max"
+  tags: ["OS-21"]
+  block:
+    - name: "OS-21 | Nap module nf_conntrack"
+      community.general.modprobe:
+        name: nf_conntrack
+        state: present
+      failed_when: false
+
+    - name: "OS-21 | Bao dam module duoc nap khi boot"
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/nf_conntrack.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: "nf_conntrack\n"
+
+    - name: "OS-21 | Ghi drop-in sysctl conntrack"
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/90-hardening-conntrack.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          net.netfilter.nf_conntrack_max = {{ harden_conntrack_max | int }}
+      notify: reload sysctl
+
+    - name: "OS-21 | Ap dung ngay"
+      ansible.posix.sysctl:
+        name: net.netfilter.nf_conntrack_max
+        value: "{{ harden_conntrack_max | int }}"
+        sysctl_set: true
+        reload: false
+      failed_when: false
+
+# ===================== OS-22: ip_conntrack_hashsize =====================
+- name: "OS-22 | nf_conntrack hashsize"
+  tags: ["OS-22"]
+  block:
+    - name: "OS-22 | Ghi tham so module (co hieu luc sau reboot / reload module)"
+      ansible.builtin.copy:
+        dest: /etc/modprobe.d/nf_conntrack.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: "options nf_conntrack hashsize={{ harden_conntrack_hashsize | int }}\n"
+
+    - name: "OS-22 | Kiem tra hashsize hien tai"
+      ansible.builtin.slurp:
+        src: /sys/module/nf_conntrack/parameters/hashsize
+      register: hashsize_now
+      failed_when: false
+
+    - name: "OS-22 | Ap dung hashsize ngay lap tuc"
+      ansible.builtin.shell: "echo {{ harden_conntrack_hashsize | int }} > /sys/module/nf_conntrack/parameters/hashsize"
+      when:
+        - hashsize_now.content is defined
+        - (hashsize_now.content | b64decode | trim | int) < (harden_conntrack_hashsize | int)
+      changed_when: true
+
+# ===================== OS-38: zone_reclaim_mode =====================
+- name: "OS-38 | vm.zone_reclaim_mode = 0"
+  tags: ["OS-38"]
+  block:
+    - name: "OS-38 | Ghi drop-in sysctl"
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/90-hardening-zone-reclaim.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: "vm.zone_reclaim_mode = 0\n"
+      notify: reload sysctl
+
+    - name: "OS-38 | Ap dung ngay"
+      ansible.posix.sysctl:
+        name: vm.zone_reclaim_mode
+        value: "0"
+        sysctl_set: true
+        reload: false
+
+# ===================== OS-42: Bo tham so toi uu OS =====================
+- name: "OS-42 | Bo sysctl theo guideline"
+  tags: ["OS-42"]
+  block:
+    - name: "OS-42 | Ghi /etc/sysctl.d/99-os-tuning.conf"
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-os-tuning.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Quan ly boi cong cu hardening - khong sua tay
+          {% for k, v in (harden_sysctl_guideline | dictsort) %}
+          {{ k }} = {{ v }}
+          {% endfor %}
+      notify: reload sysctl
+
+    - name: "OS-42 | Ap dung tung tham so ngay"
+      ansible.posix.sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        sysctl_set: true
+        reload: false
+      loop: "{{ harden_sysctl_guideline | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      failed_when: false

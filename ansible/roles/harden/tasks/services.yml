@@ -1,0 +1,151 @@
+---
+# ===================== OS-14: Kernel dump =====================
+- name: "OS-14 | Cau hinh kdump"
+  tags: ["OS-14"]
+  block:
+    - name: "OS-14 | Bo qua neu chua cho phep thay doi can reboot"
+      ansible.builtin.debug:
+        msg: >-
+          BO QUA OS-14: muc nay sua GRUB va chi co hieu luc sau khi REBOOT.
+          Bat 'Cho phep thay doi can reboot' trong Cau hinh neu muon ap dung.
+      when: not (harden_allow_reboot_changes | bool)
+
+    - name: "OS-14 | Cai goi kdump"
+      ansible.builtin.package:
+        name: "{{ 'kdump-tools' if ansible_os_family == 'Debian' else 'kexec-tools' }}"
+        state: present
+      when: harden_allow_reboot_changes | bool
+
+    - name: "OS-14 | Dat crashkernel trong GRUB (Debian)"
+      ansible.builtin.lineinfile:
+        path: /etc/default/grub
+        regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
+        line: >-
+          GRUB_CMDLINE_LINUX_DEFAULT="quiet splash
+          crashkernel=2G-4G:320M,4G-32G:512M,32G-64G:1024M,64G-128G:2048M,128G-:4096M"
+        backup: true
+      when:
+        - harden_allow_reboot_changes | bool
+        - ansible_os_family == "Debian"
+      notify: update grub
+
+    - name: "OS-14 | Bat service kdump"
+      ansible.builtin.service:
+        name: "{{ 'kdump-tools' if ansible_os_family == 'Debian' else 'kdump' }}"
+        state: started
+        enabled: true
+      when: harden_allow_reboot_changes | bool
+      failed_when: false
+
+    - name: "OS-14 | Nhac reboot"
+      ansible.builtin.debug:
+        msg: "OS-14 da cau hinh xong. CAN REBOOT may chu de crashkernel co hieu luc."
+      when: harden_allow_reboot_changes | bool
+
+# ===================== OS-15: sendmail / postfix =====================
+- name: "OS-15 | Tat dich vu MTA"
+  tags: ["OS-15"]
+  block:
+    - name: "OS-15 | Dung va tat sendmail/postfix/exim4"
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - sendmail
+        - postfix
+        - exim4
+      failed_when: false
+
+# ===================== OS-26: Tat tien trinh thua =====================
+- name: "OS-26 | Tat dich vu khong can thiet"
+  tags: ["OS-26"]
+  block:
+    - name: "OS-26 | Dung va tat cups/bluetooth/avahi"
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - cups
+        - cups-browsed
+        - bluetooth
+        - avahi-daemon
+      failed_when: false
+
+    - name: "OS-26 | Mask socket cua cups va avahi"
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        masked: true
+      loop:
+        - cups.socket
+        - avahi-daemon.socket
+      failed_when: false
+
+# ===================== OS-35: rsyslog =====================
+- name: "OS-35 | Cau hinh rsyslog"
+  tags: ["OS-35"]
+  block:
+    - name: "OS-35 | Cai rsyslog"
+      ansible.builtin.package:
+        name: rsyslog
+        state: present
+
+    - name: "OS-35 | Bat va khoi dong rsyslog"
+      ansible.builtin.service:
+        name: rsyslog
+        state: started
+        enabled: true
+
+    - name: "OS-35 | Cau hinh forward log ve log server tap trung"
+      ansible.builtin.copy:
+        dest: /etc/rsyslog.d/90-hardening-forward.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Quan ly boi cong cu hardening
+          # Hang doi tren dia, khong mat log khi log server gian doan
+          $ActionQueueFileName hardening_fwd
+          $ActionQueueMaxDiskSpace 1g
+          $ActionQueueSaveOnShutdown on
+          $ActionQueueType LinkedList
+          $ActionResumeRetryCount -1
+          {% for s in harden_log_servers %}
+          *.* @@{{ s }}
+          {% endfor %}
+      when: harden_log_servers | length > 0
+      notify: restart rsyslog
+
+    - name: "OS-35 | Bo qua forward log neu chua khai bao log server"
+      ansible.builtin.debug:
+        msg: "BO QUA phan forward log cua OS-35: chua khai bao harden_log_servers."
+      when: harden_log_servers | length == 0
+
+# ===================== OS-45: Cai goi LLDPD =====================
+- name: "OS-45 | LLDPD cho may chu vat ly"
+  tags: ["OS-45"]
+  block:
+    - name: "OS-45 | Nhan dien moi truong ao hoa"
+      ansible.builtin.command: systemd-detect-virt
+      register: virt_type
+      changed_when: false
+      failed_when: false
+
+    - name: "OS-45 | Bo qua voi may ao"
+      ansible.builtin.debug:
+        msg: "BO QUA OS-45: day la may ao ({{ virt_type.stdout }}), LLDPD chi bat buoc voi may vat ly."
+      when: virt_type.stdout not in ["none", ""]
+
+    - name: "OS-45 | Cai va bat lldpd"
+      ansible.builtin.package:
+        name: lldpd
+        state: present
+      when: virt_type.stdout in ["none", ""]
+
+    - name: "OS-45 | Bat service lldpd"
+      ansible.builtin.service:
+        name: lldpd
+        state: started
+        enabled: true
+      when: virt_type.stdout in ["none", ""]

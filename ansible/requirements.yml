@@ -1,0 +1,8 @@
+---
+# Collection can thiet cho role harden.
+# Phien ban duoc ghim de tuong thich voi ansible-core 2.17.x.
+collections:
+  - name: community.general
+    version: ">=10.0.0,<11.0.0"
+  - name: ansible.posix
+    version: ">=1.5.4,<2.0.0"

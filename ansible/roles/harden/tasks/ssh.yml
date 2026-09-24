@@ -1,0 +1,94 @@
+---
+# ===================== OS-09: Chan login root truc tiep qua SSH =====================
+- name: "OS-09 | PermitRootLogin no"
+  tags: ["OS-09"]
+  block:
+    - name: "OS-09 | Kiem tra con duong dang nhap quan tri khac root"
+      ansible.builtin.shell: |
+        getent group wheel sudo 2>/dev/null | cut -d: -f4 | tr ',' '\n' | sed '/^$/d' | sort -u
+      register: admin_capable
+      changed_when: false
+
+    - name: "OS-09 | Canh bao khi khong co user quan tri nao ngoai root"
+      ansible.builtin.fail:
+        msg: >-
+          TU CHOI thuc hien OS-09: khong tim thay user nao trong group wheel/sudo.
+          Tat login root khi chua co duong vao khac se khoa hoan toan may chu.
+          Hay tao user quan tri va khai bao trong Cau hinh truoc.
+      when:
+        - admin_capable.stdout | trim | length == 0
+        - harden_admin_users | length == 0
+
+    - name: "OS-09 | Ghi drop-in sshd"
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/60-permitrootlogin.conf
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          # Quan ly boi cong cu hardening
+          PermitRootLogin no
+        validate: "/usr/sbin/sshd -t -f %s"
+      notify: restart sshd
+
+    - name: "OS-09 | Vo hieu hoa dong PermitRootLogin cu trong sshd_config"
+      ansible.builtin.replace:
+        path: /etc/ssh/sshd_config
+        regexp: '^\s*(PermitRootLogin\s+(?!no).*)$'
+        replace: '# thay the boi cong cu hardening: \1'
+        backup: true
+      notify: restart sshd
+
+# ===================== OS-30: Quan tri tu xa qua kenh an toan =====================
+- name: "OS-30 | Bo cau hinh SSH an toan"
+  tags: ["OS-30"]
+  block:
+    - name: "OS-30 | Ghi /etc/ssh/sshd_config.d/99-hardening.conf"
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/99-hardening.conf
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          # Quan ly boi cong cu hardening - khong sua tay
+          PermitRootLogin no
+          PermitEmptyPasswords no
+          MaxAuthTries {{ harden_ssh_max_auth_tries }}
+          ClientAliveInterval {{ harden_ssh_client_alive_interval }}
+          ClientAliveCountMax {{ harden_ssh_client_alive_count_max }}
+          X11Forwarding no
+          IgnoreRhosts yes
+          HostbasedAuthentication no
+          LoginGraceTime 60
+          MACs {{ harden_ssh_macs | join(',') }}
+        validate: "/usr/sbin/sshd -t -f %s"
+      notify: restart sshd
+
+    - name: "OS-30 | Kiem tra toan bo cau hinh sshd hop le"
+      ansible.builtin.command: /usr/sbin/sshd -t
+      changed_when: false
+
+# ===================== OS-31: Tu dong ngat phien =====================
+- name: "OS-31 | TMOUT tu dong ngat phien"
+  tags: ["OS-31"]
+  block:
+    - name: "OS-31 | Ghi /etc/profile.d/99-hardening-tmout.sh"
+      ansible.builtin.copy:
+        dest: /etc/profile.d/99-hardening-tmout.sh
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Quan ly boi cong cu hardening
+          # Tu dong ngat phien sau {{ harden_tmout }} giay idle
+          TMOUT={{ harden_tmout }}
+          readonly TMOUT
+          export TMOUT
+
+    - name: "OS-31 | Go dong TMOUT trung lap trong /etc/profile"
+      ansible.builtin.replace:
+        path: /etc/profile
+        regexp: '^(\s*(readonly\s+TMOUT|export\s+TMOUT|TMOUT\s*=.*))$'
+        replace: '# chuyen sang /etc/profile.d/99-hardening-tmout.sh: \1'
+        backup: true
+      failed_when: false

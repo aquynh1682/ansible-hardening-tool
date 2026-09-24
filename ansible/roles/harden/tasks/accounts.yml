@@ -1,0 +1,296 @@
+---
+# ===================== OS-05: Kiem soat tai khoan user thuong =====================
+- name: "OS-05 | Gioi han crontab va SSH theo danh sach user"
+  tags: ["OS-05"]
+  block:
+    - name: "OS-05 | Bo qua neu chua khai bao user quan tri"
+      ansible.builtin.debug:
+        msg: >-
+          BO QUA OS-05: harden_admin_users trong. Neu ap dung SSH allowlist khi
+          chua biet user hop le se khoa mat quyen truy cap may chu.
+      when: harden_admin_users | length == 0
+
+    - name: "OS-05 | Tao /etc/cron.allow"
+      ansible.builtin.copy:
+        dest: /etc/cron.allow
+        owner: root
+        group: root
+        mode: "0640"
+        content: |
+          root
+          {% for u in harden_admin_users %}
+          {{ u }}
+          {% endfor %}
+          {% for u in harden_business_users %}
+          {{ u }}
+          {% endfor %}
+      when: harden_admin_users | length > 0
+
+    - name: "OS-05 | Bao dam group wheel ton tai"
+      ansible.builtin.group:
+        name: wheel
+        state: present
+      when: harden_admin_users | length > 0
+
+    - name: "OS-05 | Them user quan tri vao group wheel"
+      ansible.builtin.user:
+        name: "{{ item }}"
+        groups: wheel
+        append: true
+      loop: "{{ harden_admin_users }}"
+      when: harden_admin_users | length > 0
+
+    - name: "OS-05 | Gioi han SSH theo group"
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/50-allowgroups.conf
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          AllowGroups {{ harden_ssh_allow_groups | join(' ') }}
+        validate: "/usr/sbin/sshd -t -f %s"
+      when: harden_admin_users | length > 0
+      notify: restart sshd
+
+# ===================== OS-06: Quyen sudo =====================
+- name: "OS-06 | Sieu chat quyen sudo NOPASSWD"
+  tags: ["OS-06"]
+  block:
+    - name: "OS-06 | Tim cac rule NOPASSWD: ALL dang ton tai"
+      ansible.builtin.shell: |
+        grep -rniE '^[^#]*NOPASSWD:[[:space:]]*ALL' /etc/sudoers /etc/sudoers.d/ 2>/dev/null || true
+      register: nopasswd_all
+      changed_when: false
+
+    - name: "OS-06 | Bao cao rule vi pham (KHONG tu dong xoa)"
+      ansible.builtin.debug:
+        msg: >-
+          Phat hien rule NOPASSWD: ALL. Cong cu KHONG tu dong xoa vi co the
+          lam mat quyen quan tri. Can xu ly thu cong:
+          {{ nopasswd_all.stdout_lines }}
+      when: nopasswd_all.stdout | length > 0
+
+    - name: "OS-06 | Ghi rule sudo toi thieu, khong can password"
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/20-hardening-minimal
+        owner: root
+        group: root
+        mode: "0440"
+        content: |
+          # Quan ly boi cong cu hardening
+          # Chi cho phep tap lenh chuan doan toi thieu, khong can password
+          %wheel ALL=(ALL) NOPASSWD: {{ harden_sudo_trace_binaries | join(', ') }}
+        validate: "/usr/sbin/visudo -cf %s"
+
+# ===================== OS-16: Gan quyen trace cho all user =====================
+- name: "OS-16 | Cap quyen trace cho toan bo user"
+  tags: ["OS-16"]
+  block:
+    - name: "OS-16 | Ghi /etc/sudoers.d/21-hardening-trace"
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/21-hardening-trace
+        owner: root
+        group: root
+        mode: "0440"
+        content: |
+          # Quan ly boi cong cu hardening
+          ############# Cap quyen sudo trace ##########
+          ALL ALL=(root) NOPASSWD: /usr/bin/tcptraceroute, /usr/bin/traceroute, /bin/tcptraceroute, /bin/traceroute
+        validate: "/usr/sbin/visudo -cf %s"
+
+# ===================== OS-23: Password never expires =====================
+- name: "OS-23 | Mat khau khong het han voi user nghiep vu"
+  tags: ["OS-23"]
+  block:
+    - name: "OS-23 | Lay danh sach user uid >= 1000 co shell dang nhap"
+      ansible.builtin.shell: |
+        awk -F: '$3>=1000 && $3<65534 && $7 !~ /(nologin|false)$/ {print $1}' /etc/passwd
+      register: login_users
+      changed_when: false
+
+    - name: "OS-23 | Dat max days = 99999"
+      ansible.builtin.user:
+        name: "{{ item }}"
+        password_expire_max: 99999
+      loop: "{{ login_users.stdout_lines }}"
+      when: login_users.stdout_lines | length > 0
+
+# ===================== OS-27: Chi group wheel duoc su root =====================
+- name: "OS-27 | pam_wheel cho lenh su"
+  tags: ["OS-27"]
+  block:
+    - name: "OS-27 | Bo qua neu chua khai bao user quan tri"
+      ansible.builtin.debug:
+        msg: >-
+          BO QUA OS-27: harden_admin_users trong. Bat pam_wheel khi group wheel
+          rong se khien KHONG AI su duoc sang root.
+      when: harden_admin_users | length == 0
+
+    - name: "OS-27 | Bao dam group wheel ton tai"
+      ansible.builtin.group:
+        name: wheel
+        state: present
+      when: harden_admin_users | length > 0
+
+    - name: "OS-27 | Them user quan tri vao group wheel"
+      ansible.builtin.user:
+        name: "{{ item }}"
+        groups: wheel
+        append: true
+      loop: "{{ harden_admin_users }}"
+      when: harden_admin_users | length > 0
+
+    - name: "OS-27 | Xac nhan group wheel co thanh vien truoc khi bat pam_wheel"
+      ansible.builtin.shell: "getent group wheel | cut -d: -f4"
+      register: wheel_members
+      changed_when: false
+      when: harden_admin_users | length > 0
+
+    - name: "OS-27 | Bat pam_wheel trong /etc/pam.d/su"
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/su
+        regexp: '^\s*#?\s*auth\s+required\s+pam_wheel\.so'
+        line: "auth       required   pam_wheel.so use_uid"
+        insertafter: '^auth\s+sufficient\s+pam_rootok\.so'
+        backup: true
+      when:
+        - harden_admin_users | length > 0
+        - wheel_members.stdout | default('') | length > 0
+
+# ===================== OS-28: Chinh sach mat khau manh =====================
+- name: "OS-28 | Chinh sach mat khau manh"
+  tags: ["OS-28"]
+  block:
+    - name: "OS-28 | Cai goi pwquality"
+      ansible.builtin.package:
+        name: "{{ 'libpam-pwquality' if ansible_os_family == 'Debian' else 'libpwquality' }}"
+        state: present
+
+    - name: "OS-28 | Cau hinh /etc/security/pwquality.conf"
+      ansible.builtin.lineinfile:
+        path: /etc/security/pwquality.conf
+        regexp: '^\s*#?\s*{{ item.key }}\s*='
+        line: "{{ item.key }} = {{ item.value }}"
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - { key: "minlen", value: "8" }
+        - { key: "dcredit", value: "-1" }
+        - { key: "ucredit", value: "-1" }
+        - { key: "lcredit", value: "-1" }
+        - { key: "ocredit", value: "-1" }
+        - { key: "difok", value: "1" }
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: "OS-28 | Bao dam PAM nap pam_pwquality (Debian)"
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/common-password
+        regexp: '^password\s+requisite\s+pam_pwquality\.so'
+        line: "password        requisite                       pam_pwquality.so retry=3"
+        insertbefore: '^password\s+\[success=1 default=ignore\]\s+pam_unix\.so'
+        backup: true
+      when: ansible_os_family == "Debian"
+
+    - name: "OS-28 | Bat lich su mat khau remember=5 (Debian)"
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/common-password
+        regexp: '^password\s+(required|requisite)\s+pam_pwhistory\.so'
+        line: "password        requisite                       pam_pwhistory.so remember=5 use_authtok"
+        insertbefore: '^password\s+\[success=1 default=ignore\]\s+pam_unix\.so'
+        backup: true
+      when: ansible_os_family == "Debian"
+
+    - name: "OS-28 | Cau hinh pam cho RedHat"
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/system-auth
+        regexp: '^password\s+requisite\s+pam_pwquality\.so'
+        line: "password    requisite     pam_pwquality.so try_first_pass local_users_only retry=3"
+        backup: true
+      when: ansible_os_family == "RedHat"
+
+# ===================== OS-29: Thuat toan ma hoa mat khau =====================
+- name: "OS-29 | SHA512 cho mat khau"
+  tags: ["OS-29"]
+  block:
+    - name: "OS-29 | ENCRYPT_METHOD SHA512 trong login.defs"
+      ansible.builtin.lineinfile:
+        path: /etc/login.defs
+        regexp: '^\s*#?\s*ENCRYPT_METHOD'
+        line: "ENCRYPT_METHOD SHA512"
+        backup: true
+
+    - name: "OS-29 | Kiem tra pam_unix da dung sha512/yescrypt"
+      ansible.builtin.shell: |
+        grep -E '^password.*pam_unix\.so' /etc/pam.d/common-password 2>/dev/null || \
+        grep -E '^password.*pam_unix\.so' /etc/pam.d/system-auth 2>/dev/null || true
+      register: pam_unix_line
+      changed_when: false
+
+    - name: "OS-29 | Them sha512 vao pam_unix (Debian)"
+      ansible.builtin.replace:
+        path: /etc/pam.d/common-password
+        regexp: '^(password\s+\[success=1 default=ignore\]\s+pam_unix\.so(?!.*(sha512|yescrypt)).*)$'
+        replace: '\1 sha512'
+        backup: true
+      when:
+        - ansible_os_family == "Debian"
+        - "'sha512' not in pam_unix_line.stdout"
+        - "'yescrypt' not in pam_unix_line.stdout"
+
+# ===================== OS-33: Bien moi truong PATH =====================
+- name: "OS-33 | Lam sach bien PATH"
+  tags: ["OS-33"]
+  block:
+    - name: "OS-33 | Tim PATH nguy hiem trong cau hinh he thong"
+      ansible.builtin.shell: |
+        grep -rnE '^[^#]*PATH=.*(::|:\.|\./|:$|/tmp)' /etc/environment /etc/profile /etc/profile.d/ /root/.bashrc /root/.profile 2>/dev/null || true
+      register: bad_path
+      changed_when: false
+
+    - name: "OS-33 | Bao cao PATH nguy hiem"
+      ansible.builtin.debug:
+        msg: >-
+          Phat hien PATH chua duong dan nguy hiem. Cong cu KHONG tu dong sua vi
+          co the lam hong ung dung dang chay. Can xu ly thu cong:
+          {{ bad_path.stdout_lines }}
+      when: bad_path.stdout | length > 0
+
+    - name: "OS-33 | Dat secure_path an toan cho sudo"
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers
+        regexp: '^Defaults\s+secure_path'
+        line: 'Defaults        secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'
+        validate: "/usr/sbin/visudo -cf %s"
+        backup: true
+
+# ===================== OS-34: Cau hinh crontab =====================
+- name: "OS-34 | cron.allow / cron.deny"
+  tags: ["OS-34"]
+  block:
+    - name: "OS-34 | Tao /etc/cron.allow neu chua co"
+      ansible.builtin.copy:
+        dest: /etc/cron.allow
+        owner: root
+        group: root
+        mode: "0640"
+        force: false
+        content: |
+          root
+          {% for u in harden_admin_users %}
+          {{ u }}
+          {% endfor %}
+
+    - name: "OS-34 | Chuan hoa quyen /etc/cron.allow"
+      ansible.builtin.file:
+        path: /etc/cron.allow
+        owner: root
+        group: root
+        mode: "0640"
+
+    - name: "OS-34 | Xoa /etc/cron.deny"
+      ansible.builtin.file:
+        path: /etc/cron.deny
+        state: absent

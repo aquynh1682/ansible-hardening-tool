@@ -1,0 +1,127 @@
+---
+# ===================== OS-10: Firewall mem =====================
+# CANH BAO AN TOAN: task nay luon mo SSH cho (a) cac dai IP quan tri khai bao
+# trong Cau hinh va (b) chinh IP cua may dang chay Ansible, TRUOC khi bat
+# firewall. Neu chua khai bao dai IP quan tri, toan bo muc se bi bo qua.
+- name: "OS-10 | Firewall mem (ufw)"
+  tags: ["OS-10"]
+  block:
+    - name: "OS-10 | Bo qua neu chua khai bao dai IP quan tri"
+      ansible.builtin.debug:
+        msg: >-
+          BO QUA OS-10: harden_admin_networks dang trong. Bat firewall khi chua
+          biet dai IP quan tri se tu khoa minh ra khoi may chu.
+      when: harden_admin_networks | length == 0
+
+    - name: "OS-10 | Cac buoc cau hinh firewall"
+      when: harden_admin_networks | length > 0
+      block:
+        - name: "OS-10 | Lay IP nguon cua ket noi SSH hien tai"
+          ansible.builtin.shell: 'echo "${SSH_CLIENT:-}" | awk "{print \$1}"'
+          register: ssh_src
+          changed_when: false
+          become: false
+          failed_when: false
+
+        - name: "OS-10 | Lay cong SSH dang lang nghe"
+          ansible.builtin.shell: "sshd -T 2>/dev/null | awk '/^port /{print $2}' | head -1"
+          register: ssh_port_raw
+          changed_when: false
+
+        - name: "OS-10 | Chot cong SSH"
+          ansible.builtin.set_fact:
+            harden_ssh_port: "{{ ssh_port_raw.stdout | trim | default('22', true) or '22' }}"
+
+        - name: "OS-10 | Cai ufw"
+          ansible.builtin.package:
+            name: ufw
+            state: present
+
+        - name: "OS-10 | Chinh sach mac dinh: tu choi chieu vao"
+          community.general.ufw:
+            direction: incoming
+            policy: deny
+
+        - name: "OS-10 | Chinh sach mac dinh: cho phep chieu ra"
+          community.general.ufw:
+            direction: outgoing
+            policy: allow
+
+        - name: "OS-10 | MO SSH cho IP cua may chay Ansible (chong tu khoa)"
+          community.general.ufw:
+            rule: allow
+            src: "{{ ssh_src.stdout | trim }}"
+            port: "{{ harden_ssh_port }}"
+            proto: tcp
+            comment: "Ansible controller - cong cu hardening"
+          when: ssh_src.stdout | trim | length > 0
+
+        - name: "OS-10 | MO SSH cho cac dai IP quan tri"
+          community.general.ufw:
+            rule: allow
+            src: "{{ item }}"
+            port: "{{ harden_ssh_port }}"
+            proto: tcp
+            comment: "Chi cho phep SSH tu dai IP quan tri"
+          loop: "{{ harden_admin_networks }}"
+
+        - name: "OS-10 | Mo cac port dich vu khai bao them"
+          community.general.ufw:
+            rule: allow
+            src: "{{ item.from | default('any') }}"
+            port: "{{ item.port }}"
+            proto: "{{ item.proto | default('tcp') }}"
+            comment: "{{ item.comment | default('Dich vu nghiep vu') }}"
+          loop: "{{ harden_extra_firewall_rules }}"
+          loop_control:
+            label: "{{ item.port }}/{{ item.proto | default('tcp') }}"
+
+        - name: "OS-10 | Bat ghi log firewall"
+          community.general.ufw:
+            logging: "low"
+
+        - name: "OS-10 | Bat ufw"
+          community.general.ufw:
+            state: enabled
+
+        - name: "OS-10 | Doc lai trang thai de xac nhan"
+          ansible.builtin.command: ufw status verbose
+          register: ufw_final
+          changed_when: false
+
+        - name: "OS-10 | Trang thai firewall sau khi cau hinh"
+          ansible.builtin.debug:
+            var: ufw_final.stdout_lines
+
+# ===================== OS-36: Bat iptables/netfilter khi boot =====================
+- name: "OS-36 | Bao dam firewall tu bat khi khoi dong"
+  tags: ["OS-36"]
+  block:
+    - name: "OS-36 | Kiem tra ufw da cai chua"
+      ansible.builtin.stat:
+        path: /usr/sbin/ufw
+      register: ufw_bin
+
+    - name: "OS-36 | Bat service ufw khi boot"
+      ansible.builtin.service:
+        name: ufw
+        enabled: true
+      when: ufw_bin.stat.exists
+
+    - name: "OS-36 | Bao dam rule iptables duoc luu qua reboot (khi khong dung ufw)"
+      ansible.builtin.package:
+        name: iptables-persistent
+        state: present
+      when:
+        - not ufw_bin.stat.exists
+        - ansible_os_family == "Debian"
+      failed_when: false
+
+    - name: "OS-36 | Doc lai rule netfilter dang hieu luc"
+      ansible.builtin.shell: "iptables -S 2>/dev/null | head -40 || true"
+      register: ipt_rules
+      changed_when: false
+
+    - name: "OS-36 | Rule netfilter hien tai"
+      ansible.builtin.debug:
+        var: ipt_rules.stdout_lines

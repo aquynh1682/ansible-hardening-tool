@@ -1,0 +1,70 @@
+---
+# Cac buoc chuan bi, luon chay du chon tag nao.
+
+- name: Xac dinh ten service sshd theo distro
+  ansible.builtin.set_fact:
+    harden_sshd_service: "{{ 'ssh' if ansible_os_family == 'Debian' else 'sshd' }}"
+    harden_chrony_service: "{{ 'chrony' if ansible_os_family == 'Debian' else 'chronyd' }}"
+
+- name: Tinh fs.file-max theo RAM neu chua khai bao
+  ansible.builtin.set_fact:
+    harden_file_max_effective: >-
+      {{ harden_file_max if (harden_file_max | string | length > 0)
+         else (71680 * ((ansible_memtotal_mb | int / 1024) | round | int)) | int }}
+
+- name: Tao thu muc luu ban sao cau hinh truoc khi sua
+  ansible.builtin.file:
+    path: /var/backups/hardening
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# Chi dung toi sshd khi lan chay nay thuc su co chon muc lien quan SSH,
+# de khong gay tac dong ngoai pham vi nguoi dung da chon.
+- name: Xac dinh lan chay co dong toi sshd khong
+  ansible.builtin.set_fact:
+    harden_touches_ssh: >-
+      {{ (ansible_run_tags | intersect(['all', 'OS-05', 'OS-09', 'OS-30'])) | length > 0 }}
+
+- name: Chuan bi sshd_config.d
+  when: harden_touches_ssh | bool
+  block:
+    - name: Bao dam thu muc sshd_config.d ton tai
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Kiem tra sshd_config da co chi thi Include chua
+      ansible.builtin.shell: |
+        grep -qE '^\s*Include\s+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config && echo yes || echo no
+      register: sshd_include
+      changed_when: false
+
+    - name: Them chi thi Include vao dau sshd_config (OpenSSH cu)
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        line: "Include /etc/ssh/sshd_config.d/*.conf"
+        insertbefore: BOF
+        firstmatch: true
+        backup: true
+      when: sshd_include.stdout == "no"
+      notify: restart sshd
+
+- name: Canh bao khi chua khai bao user quan tri
+  ansible.builtin.debug:
+    msg: >-
+      CANH BAO: harden_admin_users dang trong. Cac muc co rui ro khoa quyen
+      truy cap (OS-05 SSH allowlist, OS-27 pam_wheel) se duoc BO QUA.
+      Hay khai bao user quan tri trong phan Cau hinh cua web UI.
+  when: harden_admin_users | length == 0
+
+- name: Canh bao khi chua khai bao dai IP quan tri
+  ansible.builtin.debug:
+    msg: >-
+      CANH BAO: harden_admin_networks dang trong. Muc OS-10 (bat firewall)
+      se duoc BO QUA de tranh tu khoa minh ra khoi may chu.
+  when: harden_admin_networks | length == 0

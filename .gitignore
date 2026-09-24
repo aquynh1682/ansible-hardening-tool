@@ -1,0 +1,19 @@
+# Toan bo trang thai runtime: cau hinh, host, credential, log cac lan chay
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Ansible
+*.retry
+
+# He dieu hanh / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Cau hinh cong cu rieng tung may (duong dan tuyet doi, IP noi bo)
+.claude/settings.local.json

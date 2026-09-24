@@ -1,0 +1,37 @@
+---
+- name: reload sysctl
+  ansible.builtin.command: sysctl --system
+  changed_when: false
+
+- name: restart sshd
+  ansible.builtin.service:
+    name: "{{ harden_sshd_service }}"
+    state: restarted
+
+- name: restart chrony
+  ansible.builtin.service:
+    name: "{{ harden_chrony_service }}"
+    state: restarted
+
+- name: restart rsyslog
+  ansible.builtin.service:
+    name: rsyslog
+    state: restarted
+
+- name: update grub
+  ansible.builtin.command: "{{ 'update-grub' if ansible_os_family == 'Debian' else 'grub2-mkconfig -o /boot/grub2/grub.cfg' }}"
+  changed_when: true
+
+- name: reload ufw
+  ansible.builtin.command: ufw reload
+  changed_when: false
+
+- name: reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart cron
+  ansible.builtin.service:
+    name: "{{ 'cron' if ansible_os_family == 'Debian' else 'crond' }}"
+    state: restarted
+  failed_when: false

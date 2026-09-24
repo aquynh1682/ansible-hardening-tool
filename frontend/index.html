@@ -1,0 +1,426 @@
+<!doctype html>
+<!--
+  VDI Hardening Scanner
+  Tac gia: Quynh Ngo. Ho tro: Claude (Anthropic) qua Claude Code.
+  Cap nhat: 2026-09-24. Lich su day du: git log -- <duong dan file>
+-->
+
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VDI Hardening Scanner</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Logo VDI dung chung cho header va man hinh cho (khai bao mot lan, dung lai bang <use>) -->
+<svg width="0" height="0" aria-hidden="true" style="position:absolute">
+  <symbol id="vdiLogo" viewBox="0 0 812.6 344.2">
+    <linearGradient id="vdiInk" gradientUnits="userSpaceOnUse" x1="0" y1="114.1" x2="0" y2="328.8">
+      <stop offset="0" stop-color="#03BFD7"/>
+      <stop offset=".31" stop-color="#1E7AA4"/>
+      <stop offset=".76" stop-color="#224480"/>
+      <stop offset="1" stop-color="#233A7A"/>
+    </linearGradient>
+    <linearGradient id="vdiArc" gradientUnits="userSpaceOnUse" x1="0" y1="3.8" x2="0" y2="154.3">
+      <stop offset="0" stop-color="#ED0677"/>
+      <stop offset=".38" stop-color="#961B78"/>
+      <stop offset="1" stop-color="#5D1E79"/>
+    </linearGradient>
+    <path fill="url(#vdiInk)" d="M139.1,115.8c-12.2,0-5.1,0-139.1,0l70.3,119.1L139.1,115.8z"/>
+    <path fill="url(#vdiInk)" d="M160,115.8L80.9,252.8l54,91.4l134.6-228.4C209,115.8,177.5,115.8,160,115.8z"/>
+    <path fill="url(#vdiInk)" d="M297,329.6c0-218,0,4.6,0-213.5h106.6c58.8,0,106.6,48.1,106.6,106.9c0,58.8-47.8,106.6-106.6,106.6H297z"/>
+    <path fill="url(#vdiInk)" d="M648.5,115.8v213.5H537.7V115.8H648.5z"/>
+    <path fill="url(#vdiArc)" d="M812.6,0h-11.7c-18.9,0-36.4,10.1-45.8,26.5l-51.5,89.3l21.1,36.5L812.6,0z"/>
+    <path fill="url(#vdiArc)" d="M648.5,20.4l50.2,87l21.6-37.4c4.7-8.2,4.7-18.3,0-26.4l-5.7-9.8c-4.7-8.2-13.5-13.2-22.9-13.2H648.5z"/>
+  </symbol>
+</svg>
+
+<header>
+  <h1>
+    <svg class="brand" viewBox="0 0 812.6 344.2" role="img" aria-label="VDI"><use href="#vdiLogo"/></svg>
+    Hardening Scanner
+  </h1>
+  <nav>
+    <button data-tab="hosts" class="active">Máy chủ</button>
+    <button data-tab="results">Kết quả &amp; Report</button>
+    <button data-tab="deploy">Triển khai</button>
+    <button data-tab="creds">Credential</button>
+    <button data-tab="settings">Cấu hình</button>
+    <button data-tab="history">Lịch sử</button>
+  </nav>
+  <div id="health">đang kiểm tra…</div>
+</header>
+
+<main>
+
+  <!-- ============================ MÁY CHỦ ============================ -->
+  <section id="tab-hosts" class="tab active">
+    <div class="panel">
+      <h2>1. Khai báo dải IP và dò tìm</h2>
+      <p class="hint">
+        Hỗ trợ: IP đơn <code>10.0.0.5</code>, CIDR <code>192.168.1.0/24</code>,
+        dải ngắn <code>192.168.1.10-40</code>, dải đầy đủ <code>10.0.0.1-10.0.0.50</code>, hostname.
+        Phân tách bằng dấu phẩy, khoảng trắng hoặc xuống dòng.
+      </p>
+      <div class="row">
+        <div class="field grow">
+          <label for="specInput">Dải IP cần quét</label>
+          <textarea id="specInput" rows="3" placeholder="192.168.1.0/24&#10;10.20.30.10-25"></textarea>
+        </div>
+        <div class="field">
+          <label for="specPort">Cổng SSH</label>
+          <input id="specPort" type="number" value="22" min="1" max="65535" style="width:100px">
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button class="btn" id="btnPreview">Đếm thử</button>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button class="btn primary" id="btnDiscover">Dò tìm host</button>
+        </div>
+      </div>
+      <p class="hint" id="previewOut" style="margin-top:10px"></p>
+    </div>
+
+    <div class="panel">
+      <h2>2. Chọn máy chủ và quét đánh giá</h2>
+      <p class="hint">Mỗi host phải được gán credential SSH trước khi quét. Quá trình quét chỉ ĐỌC, không thay đổi gì trên máy đích.</p>
+      <div class="toolbar">
+        <button class="btn" id="btnSelectAll">Chọn tất cả</button>
+        <button class="btn" id="btnSelectNone">Bỏ chọn</button>
+        <select id="assignCred" style="min-width:200px"></select>
+        <button class="btn" id="btnAssign">Gán credential cho host đã chọn</button>
+        <span class="spacer"></span>
+        <button class="btn" id="btnAddHost">+ Thêm host thủ công</button>
+        <button class="btn primary" id="btnAudit">▶ Quét đánh giá</button>
+      </div>
+      <div class="scroll-x">
+        <table id="hostTable">
+          <thead>
+            <tr>
+              <th style="width:34px"><input type="checkbox" id="hostAll"></th>
+              <th>IP</th><th>Hostname</th><th>Cổng</th><th>Credential</th>
+              <th>Hệ điều hành</th><th>Lần thấy gần nhất</th><th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="empty" id="hostEmpty">Chưa có host nào. Dò tìm hoặc thêm thủ công ở trên.</div>
+    </div>
+  </section>
+
+  <!-- ============================ KẾT QUẢ ============================ -->
+  <section id="tab-results" class="tab">
+    <div class="panel">
+      <div class="row">
+        <div class="field grow">
+          <label for="scanSelect">Chọn lần quét</label>
+          <select id="scanSelect"></select>
+        </div>
+        <div class="field">
+          <label for="filterStatus">Lọc theo kết quả</label>
+          <select id="filterStatus">
+            <option value="">Tất cả</option>
+            <option value="FAIL">Chưa đạt (FAIL)</option>
+            <option value="WARN">Cần review (WARN)</option>
+            <option value="PASS">Đã đạt (PASS)</option>
+            <option value="MANUAL">Đánh giá thủ công</option>
+            <option value="NA">Không áp dụng</option>
+            <option value="ERROR">Lỗi</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button class="btn" id="btnReloadScan">Tải lại</button>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <a class="btn" id="btnCsv" href="#" target="_blank" rel="noopener">Tải CSV</a>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <a class="btn" id="btnHtml" href="#" target="_blank" rel="noopener">Bản in HTML</a>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button class="btn primary" id="btnToDeploy">Khắc phục các mục chưa đạt →</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="stats" id="scanStats"></div>
+    <div id="scanHosts"></div>
+  </section>
+
+  <!-- ============================ TRIỂN KHAI ============================ -->
+  <section id="tab-deploy" class="tab">
+    <div class="panel">
+      <h2>Triển khai hardening</h2>
+      <p class="hint">
+        Chọn máy chủ và các mục cần khắc phục. Sau khi chạy xong, công cụ tự động quét lại
+        và sinh report mới để đối chiếu trước/sau.
+      </p>
+      <div class="warnbox" id="deployWarn"></div>
+
+      <div class="row" style="margin-bottom:12px">
+        <div class="field grow">
+          <label>Máy chủ áp dụng</label>
+          <div class="scroll-y" style="max-height:180px;border:1px solid var(--border);border-radius:6px;padding:8px">
+            <div id="deployHosts" class="checkgrid"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <button class="btn" id="btnCheckAll">Chọn tất cả mục</button>
+        <button class="btn" id="btnCheckNone">Bỏ chọn tất cả</button>
+        <button class="btn" id="btnCheckSafe">Chỉ chọn mục an toàn</button>
+        <span class="spacer"></span>
+        <button class="btn primary" id="btnDeploy">▶ Triển khai</button>
+      </div>
+      <div id="deployChecks" class="checkgrid"></div>
+    </div>
+  </section>
+
+  <!-- ============================ CREDENTIAL ============================ -->
+  <section id="tab-creds" class="tab">
+    <div class="panel">
+      <h2>Thêm credential SSH</h2>
+      <p class="hint">
+        Không có database: chỉ username và <strong>đường dẫn</strong> tới private key được ghi ra
+        <code>data/credentials.json</code>. Mật khẩu <strong>chỉ giữ trong RAM</strong> của tiến trình —
+        tắt tool đi là mất, lần chạy sau sẽ hỏi lại. Private key phải KHÔNG đặt passphrase.
+      </p>
+      <div class="row">
+        <div class="field"><label>Tên gợi nhớ</label><input id="crName" placeholder="prod-ubuntu"></div>
+        <div class="field"><label>Username</label><input id="crUser" placeholder="vt_admin"></div>
+        <div class="field"><label>Kiểu xác thực</label>
+          <select id="crType"><option value="key">SSH key</option><option value="password">Mật khẩu</option></select>
+        </div>
+        <div class="field"><label>Cổng</label><input id="crPort" type="number" value="22" style="width:90px"></div>
+        <div class="field"><label>Become</label>
+          <select id="crBecome"><option value="sudo">sudo</option><option value="su">su</option></select>
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div class="field grow" id="crKeyWrap">
+          <label>Đường dẫn private key trên máy này</label>
+          <input id="crKey" placeholder="~/.ssh/id_ed25519">
+        </div>
+        <div class="field grow" id="crPassWrap" style="display:none">
+          <label>Mật khẩu SSH</label><input id="crPass" type="password" autocomplete="new-password">
+        </div>
+        <div class="field">
+          <label>Mật khẩu sudo (nếu cần)</label><input id="crSudo" type="password" autocomplete="new-password">
+        </div>
+        <div class="field"><label>&nbsp;</label><button class="btn primary" id="btnAddCred">Lưu credential</button></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Chuẩn bị máy đích trước khi thêm credential</h2>
+      <p class="hint">
+        Nên dùng SSH key với một user quản trị riêng, <strong>không dùng root</strong>: khâu triển khai
+        có mục OS-09/OS-30 ghi <code>PermitRootLogin no</code>, nếu credential là root thì ngay sau lần
+        khắc phục đầu tiên tool sẽ tự khoá mình ra khỏi máy đích.
+      </p>
+
+      <details class="guide">
+        <summary>1. Tạo SSH key trên máy đang chạy tool (bỏ qua nếu đã có)</summary>
+        <pre>ssh-keygen -t ed25519 -C "ansible-hardening" -f ~/.ssh/id_ed25519</pre>
+        <p class="hint">
+          Nhấn Enter khi được hỏi passphrase để <strong>để trống</strong> — tool chạy nền, không có chỗ
+          nhập passphrase. Lệnh tạo ra 2 file: <code>~/.ssh/id_ed25519</code> (private key, điền vào form
+          bên trên) và <code>~/.ssh/id_ed25519.pub</code> (public key, đem lên máy đích).
+        </p>
+      </details>
+
+      <details class="guide">
+        <summary>2. Tạo user quản trị trên máy đích (chạy bằng root, một lần cho mỗi máy)</summary>
+        <pre># RHEL / CentOS / Rocky / Alma — group quản trị tên 'wheel'
+useradd -m -s /bin/bash hardening
+passwd hardening
+usermod -aG wheel hardening
+
+# Debian / Ubuntu — group quản trị tên 'sudo'
+useradd -m -s /bin/bash hardening
+passwd hardening
+usermod -aG sudo hardening</pre>
+        <p class="hint">
+          <code>usermod -aG</code> mới chỉ cho phép user được dùng sudo, <strong>sudo vẫn hỏi mật
+          khẩu</strong>. Tool chạy nền nên không trả lời được câu hỏi đó: hoặc cho user sudo không cần
+          mật khẩu trên máy đích —
+        </p>
+        <pre>echo 'hardening ALL=(ALL) NOPASSWD:ALL' &gt; /etc/sudoers.d/hardening
+chmod 440 /etc/sudoers.d/hardening
+visudo -c</pre>
+        <p class="hint">
+          — hoặc điền ô <strong>“Mật khẩu sudo”</strong> ngay lúc tạo credential ở form bên trên. Bỏ qua
+          cả hai thì lần quét sẽ dừng với lỗi <code>Missing sudo password</code>.
+        </p>
+      </details>
+
+      <p class="hint" style="margin:14px 0 0">
+        <strong>Bước 3 — đưa public key lên máy đích.</strong> Hai cách dưới đây cho ra cùng một kết quả,
+        chỉ cần làm <strong>một trong hai</strong>.
+      </p>
+
+      <details class="guide">
+        <summary>3a. Dùng <code>ssh-copy-id</code> — cách khuyến nghị</summary>
+        <pre>ssh-copy-id -i ~/.ssh/id_ed25519.pub hardening@10.0.0.5</pre>
+        <p class="hint">
+          Lệnh này hỏi mật khẩu của user <code>hardening</code> một lần rồi tự ghi public key vào
+          <code>~/.ssh/authorized_keys</code> trên máy đích, tự tạo thư mục và đặt quyền đúng. Từ lần sau
+          đăng nhập bằng key, không cần mật khẩu nữa. Xong bước này thì bỏ qua 3b, sang thẳng bước 4.
+        </p>
+      </details>
+
+      <details class="guide">
+        <summary>3b. Chép public key thủ công — <em>tuỳ chọn, chỉ khi 3a không dùng được</em></summary>
+        <p class="hint">
+          Cần đến cách này khi máy đích đã tắt đăng nhập bằng mật khẩu
+          (<code>PasswordAuthentication no</code>) nên <code>ssh-copy-id</code> bị từ chối, hoặc máy chạy
+          tool không có sẵn lệnh <code>ssh-copy-id</code>. Trên máy chạy tool, xem nội dung public key:
+        </p>
+        <pre>cat ~/.ssh/id_ed25519.pub</pre>
+        <p class="hint">
+          Vào máy đích bằng console (hoặc bằng user khác đang đăng nhập được), đăng nhập đúng user
+          <code>hardening</code> rồi dán nguyên dòng vừa xem vào:
+        </p>
+        <pre>mkdir -p ~/.ssh &amp;&amp; chmod 700 ~/.ssh
+echo 'ssh-ed25519 AAAA... ansible-hardening' &gt;&gt; ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys</pre>
+        <p class="hint">
+          Sai quyền là lỗi hay gặp nhất ở cách thủ công: <code>~/.ssh</code> phải 700,
+          <code>authorized_keys</code> phải 600 và thuộc sở hữu của chính user đó, nếu không sshd sẽ
+          lặng lẽ bỏ qua key mà không báo gì.
+        </p>
+      </details>
+
+      <details class="guide">
+        <summary>4. Kiểm tra trước khi quét</summary>
+        <pre>ssh -i ~/.ssh/id_ed25519 hardening@10.0.0.5 'python3 -V; sudo -n true &amp;&amp; echo "sudo khong can mat khau"'</pre>
+        <p class="hint">
+          Đây đúng là thứ task <em>“Kiem tra ket noi va python3 tren host dich”</em> kiểm tra. Chạy được
+          là điền form: Username <code>hardening</code>, Kiểu xác thực <strong>SSH key</strong>, đường dẫn
+          <code>~/.ssh/id_ed25519</code>.
+        </p>
+        <p class="hint">
+          Đọc kết quả: <code>Permission denied (publickey,password)</code> nghĩa là key chưa lên tới máy
+          đích — quay lại bước 3a/3b. Còn <code>sudo: a password is required</code> nghĩa là SSH đã thông
+          nhưng sudo còn hỏi mật khẩu — quay lại bước 2, vì lúc quét sẽ báo
+          <code>Missing sudo password</code>.
+        </p>
+      </details>
+
+      <details class="guide">
+        <summary>Khi nào mới dùng kiểu “Mật khẩu”?</summary>
+        <p class="hint">
+          Chỉ nên dùng để thử nhanh. Ansible cần <code>sshpass</code> trên máy chạy tool mới đẩy được mật
+          khẩu SSH — xem thanh trạng thái góc trên bên phải, nếu báo <strong>thiếu sshpass</strong> thì
+          kiểu này không chạy được. Cài bằng <code>brew install sshpass</code> (macOS) hoặc
+          <code>apt install sshpass</code> / <code>dnf install sshpass</code> (Linux). Mật khẩu chỉ nằm
+          trong RAM, tắt tool là mất và lần chạy sau tool sẽ hỏi lại.
+        </p>
+      </details>
+    </div>
+
+    <div class="panel">
+      <h2>Danh sách credential</h2>
+      <table id="credTable">
+        <thead><tr><th>Tên</th><th>User</th><th>Kiểu</th><th>Cổng</th><th>Become</th><th>Trạng thái</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="empty" id="credEmpty">Chưa có credential nào.</div>
+    </div>
+  </section>
+
+  <!-- ============================ CẤU HÌNH ============================ -->
+  <section id="tab-settings" class="tab">
+    <div class="panel">
+      <h2>Tham số chuẩn hardening</h2>
+      <p class="hint">Các giá trị này được dùng cho cả khâu đánh giá (so sánh với thực tế) lẫn khâu triển khai.</p>
+      <div class="row">
+        <div class="field"><label>Timezone</label><input id="stTimezone"></div>
+        <div class="field"><label>nofile tối thiểu</label><input id="stNofile" type="number"></div>
+        <div class="field"><label>nproc tối thiểu</label><input id="stNproc" type="number"></div>
+        <div class="field"><label>conntrack_max</label><input id="stConntrack" type="number"></div>
+        <div class="field"><label>conntrack hashsize</label><input id="stHashsize" type="number"></div>
+        <div class="field"><label>TMOUT (giây)</label><input id="stTmout" type="number"></div>
+        <div class="field"><label>OpenSSL tối thiểu</label><input id="stOpenssl"></div>
+      </div>
+
+      <div class="row" style="margin-top:12px">
+        <div class="field grow"><label>NTP server nội bộ (mỗi dòng 1)</label><textarea id="stNtp" rows="3"></textarea></div>
+        <div class="field grow"><label>Log server tập trung (host:port)</label><textarea id="stLog" rows="3"></textarea></div>
+        <div class="field grow"><label>Host repo nội bộ</label><textarea id="stRepo" rows="3"></textarea></div>
+      </div>
+
+      <div class="row" style="margin-top:12px">
+        <div class="field grow"><label>Dải IP quản trị được phép SSH (bắt buộc cho mục OS-10)</label><textarea id="stAdminNet" rows="3" placeholder="192.168.100.0/24"></textarea></div>
+        <div class="field grow"><label>User quản trị (bắt buộc cho OS-05 / OS-27)</label><textarea id="stAdminUser" rows="3" placeholder="vt_admin"></textarea></div>
+        <div class="field grow"><label>User nghiệp vụ (áp limits riêng)</label><textarea id="stBizUser" rows="3"></textarea></div>
+      </div>
+
+      <div class="row" style="margin-top:12px">
+        <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="stUnowned"> Quét file unowner (OS-32, có thể chậm)</label>
+        <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="stReboot"> Cho phép thay đổi cần REBOOT (OS-14 kdump/GRUB)</label>
+        <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="stVirbr"> Cho phép gỡ card mạng ảo virbr0 (OS-18)</label>
+      </div>
+
+      <div class="row" style="margin-top:14px">
+        <button class="btn primary" id="btnSaveSettings">Lưu cấu hình</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ LỊCH SỬ ============================ -->
+  <section id="tab-history" class="tab">
+    <div class="panel">
+      <h2>Lịch sử các lần chạy</h2>
+      <div class="row" style="margin-bottom:12px">
+        <div class="field"><label>So sánh trước</label><select id="cmpBefore"></select></div>
+        <div class="field"><label>So sánh sau</label><select id="cmpAfter"></select></div>
+        <div class="field"><label>&nbsp;</label><button class="btn" id="btnCompare">So sánh</button></div>
+      </div>
+      <div id="compareOut"></div>
+      <table id="scanTable">
+        <thead><tr><th>#</th><th>Loại</th><th>Trạng thái</th><th>Bắt đầu</th><th>Kết thúc</th><th>Ghi chú</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<div id="logModal">
+  <div class="box">
+    <header>
+      <strong id="logTitle">Nhật ký</strong>
+      <button class="btn" id="logClose">Đóng</button>
+    </header>
+    <pre id="logBody"></pre>
+    <footer>
+      <span id="logStatus">Đang chạy…</span>
+      <button class="btn danger" id="logCancel">Dừng</button>
+    </footer>
+  </div>
+</div>
+
+<!-- Man hinh cho: logo VDI dung yen, vong sang xoay quanh -->
+<div id="loader" class="on" role="status" aria-live="polite">
+  <div class="loader-box">
+    <div class="loader-ring">
+      <svg class="loader-mark" viewBox="0 0 812.6 344.2" role="img" aria-label="VDI"><use href="#vdiLogo"/></svg>
+    </div>
+    <div class="loader-text" id="loaderText">Đang khởi động…</div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
